@@ -20,3 +20,19 @@ run_cohort_model <- function(initial_probs, transitions, t) {
 
   probabilities
 }
+
+calculate_outcome_value <- function(probs, values) {
+  out <- 0
+  for (x in seq_along(probs)) {
+    out <- out + probs[x] * values[x]
+  }
+  out
+}
+
+calculate_outcomes <- function(probabilities, values, discount_rate = 0) {
+  out <- 0
+  for (t in seq_len(nrow(probabilities))) {
+    out <- out + calculate_outcome_value(probabilities[t, ], values) * (1 - discount_rate) ^ (t - 1)
+  }
+  out
+}

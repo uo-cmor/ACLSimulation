@@ -1,0 +1,285 @@
+---
+title: "Tutorial"
+output: learnr::tutorial
+runtime: shiny_prerendered
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+gradethis::gradethis_setup()
+knitr::opts_chunk$set(echo = FALSE)
+
+tutorial_options(exercise.eval = TRUE)
+```
+
+
+## Introduction
+
+So far, we have defined some model input parameters and code to implement a cohort-level Markov model and an individual-level state transition model. The code for these is below (which should be similar to your previous scripts).
+
+```{r parameters, exercise=TRUE}
+states <- c("healthy", "acl_acute", "acl_chronic", "acl_recovered", "oa", "tkr", "post_tkr", "dead")
+
+probs <- c(0, 1, 0, 0, 0, 0, 0, 0)
+
+transitions <- rbind(c(1, 0, 0,   0,   0,    0,   0,   0),
+                     c(0, 0, 0.4, 0.5, 0.05, 0,   0,   0.05),
+                     c(0, 0, 0.3, 0.5, 0.1,  0,   0,   0.1),
+                     c(0, 0, 0,   0.8, 0.1,  0,   0,   0.1),
+                     c(0, 0, 0,   0,   0.7,  0.1, 0,   0.2),
+                     c(0, 0, 0,   0,   0,    0,   0.8, 0.2),
+                     c(0, 0, 0,   0,   0,    0,   0.8, 0.2),
+                     c(0, 0, 0,   0,   0,    0,   0,   1))
+
+costs <- c(0, 7000, 1000, 500, 800, 20000, 1000, 0)
+utility <- c(1, 0.5, 0.7, 0.9, 0.8, 0.6, 0.9, 0)
+
+```
+
+```{r cohort-model, exercise=TRUE, exercise.setup = "parameters"}
+update_probabilities <- function(probs, transitions) {
+  as.vector(probs %*% transitions)
+}
+
+run_cohort_model <- function(initial_probs, transitions, t) {
+  probabilities <- matrix(nrow = t + 1, ncol = length(initial_probs))
+  probabilities[1, ] <- initial_probs
+
+  for (x in seq_len(t)) {
+    probabilities[x + 1, ] <- update_probabilities(probabilities[x, ],
+                                                   transitions)
+  }
+
+  probabilities
+}
+
+calculate_outcome_value <- function(probs, values) {
+  sum(probs * values)
+}
+
+calculate_outcomes <- function(probabilities, values, discount_rate = 0) {
+  t <- nrow(probabilities)
+  sum((probabilities %*% values) * (1 - discount_rate) ^ ((1:t) - 1))
+}
+
+```
+
+```{r individual-model, exercise=TRUE, exercise.setup = "cohort-model"}
+update_state <- function(initial_state, transitions) {
+  n <- nrow(transitions)
+  sample.int(n, 1, prob = transitions[initial_state, ])
+}
+
+simulate_individual <- function(initial_state, transitions, t) {
+  states <- vector("integer", length = t + 1)
+  states[1] <- initial_state
+
+  for (x in seq_len(t)) {
+    states[x + 1] <- update_state(states[x], transitions)
+  }
+
+  states
+}
+
+run_individual_model <- function(initial_states, transitions, t) {
+  n <- length(initial_states)
+
+  states <- matrix(nrow = n, ncol = t + 1)
+  for (x in seq_len(n)) {
+    states[x, ] <- simulate_individual(initial_states[x], transitions, t)
+  }
+
+  states
+}
+
+calculate_individual_outcome_value <- function(states, values) {
+  matrix(values[states], nrow = nrow(states))
+}
+
+calculate_average_outcomes <- function(states, values, discount_rate = 0) {
+  outcomes <- calculate_individual_outcome_value(states, values)
+  n <- nrow(outcomes)
+  t <- ncol(outcomes)
+  for (x in seq_len(n)) {
+    outcomes[x, ] <- outcomes[x, ] * (1 - discount_rate) ^ ((1:t) - 1)
+  }
+  mean(rowSums(outcomes))
+}
+
+```
+
+## Cost-effectiveness analysis
+
+To use these models for cost-effectiveness analysis, we need to define model input parameters that represent each of the interventions to be compared -- these could involve different values for transition probabilities, costs, and/or outcomes (health utility).
+
+For a real analysis, these would be estimated from data, such as a randomised trial, observational study, or systematic review/meta-analysis; for this example we will just make up some numbers :) Let's assume our previous input parameters represent 'business-as-usual', or an appropriate usual care comparator for the economic evaluation:
+
+```{r transitions_uc, exercise=TRUE, exercise.setup = "individual-model"}
+transitions_UC <- transitions
+transitions_UC
+```
+
+```{r costs_uc, exercise=TRUE, exercise.setup = "transitions_uc"}
+costs_UC <- costs
+costs_UC
+```
+
+```{r utility_uc, exercise=TRUE, exercise.setup = "costs_uc"}
+utility_UC <- utility
+utility_UC
+```
+
+<br>
+
+### New interventions to evaluate:
+
+Start with a hypothetical intervention that improves symptomatic recovery from ACL injury (reduces the probability of transition from `acl_acute` to `acl_chronic` (symptomatic) and increases the probability of transition to `acl_recovered` (asymptomatic)), but costs an additional $2000 per patient (over the year following injury):
+
+```{r improved-recovery-parameters, exercise=TRUE, exercise.setup = "utility_uc"}
+transitions_IR <- transitions
+transitions_IR[2, ] <- c(0, 0, 0.2, 0.7, 0.05, 0, 0, 0.05)
+
+costs_IR <- costs
+costs_IR[2] <- 9000
+```
+
+Another that provides ongoing treatment to reduce the utility losses in the post-ACL states:
+
+```{r ongoing-treatment-parameters, exercise=TRUE, exercise.setup = "improved-recovery-parameters"}
+utility_OT <- utility
+utility_OT[3:4] <- c(0.8, 0.95)
+
+costs_OT <- costs
+costs_OT[3:4] <- c(1500, 1000)
+```
+
+And another that reduces the rate of OA incidence from the post-ACL states:
+
+```{r reduced-oa-incidence-parameters, exercise=TRUE, exercise.setup = "ongoing-treatment-parameters"}
+transitions_RO <- transitions
+transitions_RO[3:4, 5] <- 0.05
+
+costs_RO <- costs
+costs_RO[3:4] <- c(1500, 1000)
+```
+
+## CEA (cont.)
+
+To complete our analysis, we will want to write some functions to (1) run the simulation model for each set of input parameters; (2) calculate the resulting cohort outcomes (i.e. aggregate costs and QALYs); and (3) compare the outcomes between interventions to compute cost-effectiveness. Let's start with the cohort-level model.
+
+First, we want a function that runs the cohort simulation model twice: once for the comparator scenario (`UC`, for usual care) and once for the intervention of interest (`TX`); and returns the two sets of cohort outcomes.
+
+```{r cohort-simulation-function, exercise=TRUE, exercise.eval=FALSE, exercise.setup="reduced-oa-incidence-parameters"}
+cohort_simulation <- function(initial_probs, parameters_UC, parameters_TX, horizon, discount_rate) {
+  # Each of `parameters_UC` and `parameters_TX` should be a containing the `transitions`, `costs`,
+  # and `utility` parameters for that scenario
+  probabilities_UC <- run_cohort_model(initial_probs, transitions = ____, t = ____)
+  probabilities_TX <- run_cohort_model(initial_probs, transitions = ____, t = ____)
+  
+  costs_UC <- calculate_outcomes(____, ____, discount_rate = discount_rate)
+  costs_TX <- calculate_outcomes(____, ____, discount_rate = discount_rate)
+  
+  QALYs_UC <- calculate_outcomes(____, ____, discount_rate = discount_rate)
+  QALYs_TX <- calculate_outcomes(____, ____, discount_rate = discount_rate)
+  
+  list(UC = list(costs = costs_UC, QALYs = QALYs_UC),
+       TX = list(costs = costs_TX, QALYs = QALYs_TX))
+}
+```
+
+```{r cohort-simulation-function-solution}
+cohort_simulation <- function(initial_probs, parameters_UC, parameters_TX, horizon, discount_rate) {
+  # Each of `parameters_UC` and `parameters_TX` should be a containing the `transitions`, `costs`,
+  # and `utility` parameters for that scenario
+  probabilities_UC <- run_cohort_model(initial_probs, transitions = parameters_UC$transitions, t = horizon)
+  probabilities_TX <- run_cohort_model(initial_probs, transitions = parameters_TX$transitions, t = horizon)
+  
+  Costs_UC <- calculate_outcomes(probabilities_UC, parameters_UC$costs, discount_rate = discount_rate)
+  Costs_TX <- calculate_outcomes(probabilities_TX, parameters_TX$costs, discount_rate = discount_rate)
+  
+  QALYs_UC <- calculate_outcomes(probabilities_UC, parameters_UC$utility, discount_rate = discount_rate)
+  QALYs_TX <- calculate_outcomes(probabilities_TX, parameters_TX$utility, discount_rate = discount_rate)
+  
+  list(UC = list(Costs = Costs_UC, QALYs = QALYs_UC),
+       TX = list(Costs = Costs_TX, QALYs = QALYs_TX))
+}
+```
+
+```{r cohort-simulation-function-code-check}
+grade_code()
+```
+
+```{r cohort-simulation-definition, exercise.setup="reduced-oa-incidence-parameters"}
+cohort_simulation <- function(initial_probs, parameters_UC, parameters_TX, horizon, discount_rate) {
+  probabilities_UC <- run_cohort_model(initial_probs, transitions = parameters_UC$transitions, t = horizon)
+  probabilities_TX <- run_cohort_model(initial_probs, transitions = parameters_TX$transitions, t = horizon)
+  
+  Costs_UC <- calculate_outcomes(probabilities_UC, parameters_UC$costs, discount_rate = discount_rate)
+  Costs_TX <- calculate_outcomes(probabilities_TX, parameters_TX$costs, discount_rate = discount_rate)
+  
+  QALYs_UC <- calculate_outcomes(probabilities_UC, parameters_UC$utility, discount_rate = discount_rate)
+  QALYs_TX <- calculate_outcomes(probabilities_TX, parameters_TX$utility, discount_rate = discount_rate)
+  
+  list(UC = list(Costs = Costs_UC, QALYs = QALYs_UC),
+       TX = list(Costs = Costs_TX, QALYs = QALYs_TX))
+}
+```
+
+Let's see what that gives us for 'Improved Recovery' (IR) intervention (compared to our usual care scenario):
+
+```{r run-cohort-simulation, exercise=TRUE, exercise.eval=FALSE, exercise.setup="cohort-simulation-definition"}
+simulation_IR <- cohort_simulation(
+  initial_probs = probs,
+  parameters_UC = list(transitions = transitions_UC, costs = costs_UC, utility = utility_UC),
+  parameters_TX = list(transitions = transitions_IR, costs = costs_IR, utility = utility_UC),
+  horizon = 10, discount_rate = 0.035
+)
+simulation_IR
+```
+
+The next step is to calculate the incremental cost-effectiveness outcomes from these: let's just do the ICER, for now.
+
+```{r icer-function, exercise=TRUE, exercise.eval=FALSE, exercise.setup="run-cohort-simulation"}
+calculate_ICER <- function(simulation_output) {
+  incremental_costs <- simulation_output$____ - simulation_output$____
+  incremental_qalys <- simulation_output$____ - simulation_output$____
+  
+  list(Costs = incremental_costs,
+       QALYs = incremental_qalys,
+       ICER = ____ / ____)
+}
+```
+
+```{r icer-function-solution}
+calculate_ICER <- function(simulation_output) {
+  incremental_costs <- simulation_output$TX$Costs - simulation_output$UC$Costs
+  incremental_qalys <- simulation_output$TX$QALYs - simulation_output$UC$QALYs
+  
+  list(Costs = incremental_costs,
+       QALYs = incremental_qalys,
+       ICER = incremental_costs / incremental_qalys)
+}
+```
+
+```{r icer-function-code-check}
+grade_code()
+```
+
+```{r icer-definition, exercise.setup="run-cohort-simulation"}
+calculate_ICER <- function(simulation_output) {
+  incremental_costs <- simulation_output$TX$Costs - simulation_output$UC$Costs
+  incremental_qalys <- simulation_output$TX$QALYs - simulation_output$UC$QALYs
+  
+  list(Costs = incremental_costs,
+       QALYs = incremental_qalys,
+       ICER = incremental_costs / incremental_qalys)
+}
+```
+
+We can then use this to calculate the ICER for this intervention:
+
+```{r icer-ir, exercise=TRUE, exercise.eval=FALSE, exercise.setup = "icer-definition"}
+ICER_IR <- calculate_ICER(simulation_IR)
+ICER_IR
+```
+
